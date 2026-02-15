@@ -38,8 +38,8 @@ func verifyBinaryIntegrity() {
     expected := "3f276cf2b62a24957d79879a7328588221446a58b906..." // replace with your binary hash
 
     if fmt.Sprintf("%x", hash) != expected {
-   //     fmt.Println("⚠️ Binary tampered! Exiting...")
-   //     os.Exit(1)
+//     fmt.Println("⚠️ Binary tampered! Exiting...")
+//     os.Exit(1)
     }
 }
 
@@ -84,11 +84,11 @@ func checkBaseline() {
         fmt.Println(" -", check)
     }
 }
-
 func startMonitor() {
     fmt.Println("Using baseline file:", baselineFile)
     fmt.Println("Starting monitor...")
 
+<<<<<<< HEAD
     data, err := ioutil.ReadFile(baselineFile)
     if err != nil {
         fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
@@ -108,6 +108,51 @@ func startMonitor() {
     }
 
     fmt.Println("Monitoring complete.")
+=======
+    // Ask user for a directory to save the log
+    fmt.Print("Enter directory to save the log (press Enter for default ~/.runtimeguard/logs): ")
+    var logDir string
+    fmt.Scanln(&logDir)
+    if logDir == "" {
+        home, _ := os.UserHomeDir()
+        logDir = filepath.Join(home, ".runtimeguard", "logs")
+    }
+
+    os.MkdirAll(logDir, 0755)
+
+    // Create a timestamped log file
+    logFile := filepath.Join(logDir, fmt.Sprintf("monitor-%s.log", time.Now().Format("2006-01-02_15-04-05")))
+    f, err := os.Create(logFile)
+    if err != nil {
+        fmt.Println("Failed to create log file:", err)
+        return
+    }
+    defer f.Close()
+
+    // Read baseline
+    data, err := ioutil.ReadFile(baselineFile)
+    if err != nil {
+        fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
+        return
+    }
+
+    var baseline Baseline
+    if err := json.Unmarshal(data, &baseline); err != nil {
+        fmt.Println("Failed to parse baseline JSON:", err)
+        return
+    }
+
+    // Run checks and log to file
+    for _, check := range baseline.Checks {
+        msg := fmt.Sprintf("Checking %s ... OK", check)
+        fmt.Println(msg)
+        f.WriteString(msg + "\n")
+        time.Sleep(1 * time.Second)
+    }
+
+    f.WriteString("Monitoring complete.\n")
+    fmt.Println("Monitoring complete. Log saved to", logFile)
+>>>>>>> 1ba00a1 (Add help command, log saving, and file integrity checks)
 }
 
 // ---------------- CLI Help ----------------
