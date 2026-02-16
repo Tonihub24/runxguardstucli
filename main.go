@@ -38,13 +38,8 @@ func verifyBinaryIntegrity() {
     expected := "3f276cf2b62a24957d79879a7328588221446a58b906..." // replace with actual SHA256
 
     if fmt.Sprintf("%x", hash) != expected {
-<<<<<<< HEAD
-//     fmt.Println("⚠️ Binary tampered! Exiting...")
-//     os.Exit(1)
-=======
-//        fmt.Println("⚠️ Binary tampered! Exiting...")
-//        os.Exit(1)
->>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
+        fmt.Println("⚠️ Binary tampered! Exiting...")
+        os.Exit(1)
     }
 }
 
