@@ -35,11 +35,16 @@ func verifyBinaryIntegrity() {
     }
 
     hash := sha256.Sum256(data)
-    expected := "3f276cf2b62a24957d79879a7328588221446a58b906..." // replace with your binary hash
+    expected := "3f276cf2b62a24957d79879a7328588221446a58b906..." // replace with actual SHA256
 
     if fmt.Sprintf("%x", hash) != expected {
+<<<<<<< HEAD
 //     fmt.Println("⚠️ Binary tampered! Exiting...")
 //     os.Exit(1)
+=======
+//        fmt.Println("⚠️ Binary tampered! Exiting...")
+//        os.Exit(1)
+>>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
     }
 }
 
@@ -89,6 +94,7 @@ func startMonitor() {
     fmt.Println("Starting monitor...")
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     data, err := ioutil.ReadFile(baselineFile)
     if err != nil {
         fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
@@ -130,6 +136,8 @@ func startMonitor() {
     defer f.Close()
 
     // Read baseline
+=======
+>>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
     data, err := ioutil.ReadFile(baselineFile)
     if err != nil {
         fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
@@ -142,31 +150,57 @@ func startMonitor() {
         return
     }
 
-    // Run checks and log to file
+    // Collect monitor output
+    output := ""
     for _, check := range baseline.Checks {
-        msg := fmt.Sprintf("Checking %s ... OK", check)
-        fmt.Println(msg)
-        f.WriteString(msg + "\n")
-        time.Sleep(1 * time.Second)
+        line := fmt.Sprintf("Checking %s ... OK\n", check)
+        fmt.Print(line)
+        output += line
+        time.Sleep(1 * time.Second) // simulate work
     }
 
+<<<<<<< HEAD
     f.WriteString("Monitoring complete.\n")
     fmt.Println("Monitoring complete. Log saved to", logFile)
 >>>>>>> 1ba00a1 (Add help command, log saving, and file integrity checks)
 }
+=======
+    fmt.Println("Monitoring complete.")
+    output += "Monitoring complete.\n"
+>>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
 
-// ---------------- CLI Help ----------------
-func printHelp() {
-    fmt.Println("Usage: runtimeguard <command>")
-    fmt.Println("\nAvailable commands:")
-    fmt.Println("  init     - Create baseline JSON and initialize system checks")
-    fmt.Println("  check    - Verify system against the existing baseline")
-    fmt.Println("  monitor  - Run monitoring on all baseline checks")
-    fmt.Println("  help     - Show this help menu")
+    // Save log file with timestamp
+    logFile := filepath.Join(filepath.Dir(baselineFile),
+        fmt.Sprintf("monitor-%s.log", time.Now().Format("2006-01-02_15-04-05")))
+    if err := ioutil.WriteFile(logFile, []byte(output), 0644); err != nil {
+        fmt.Println("Failed to save log file:", err)
+        return
+    }
+
+    fmt.Println("Log saved to:", logFile)
 }
 
 // ---------------- CLI ----------------
+func printUsage() {
+    fmt.Println("Usage: runtimeguard <init|check|monitor|help>")
+}
+
 func main() {
+    // Handle help before any baseline checks
+    if len(os.Args) < 2 {
+        printBanner()
+        printUsage()
+        return
+    }
+
+    command := os.Args[1]
+
+    if command == "help" {
+        printBanner()
+        printUsage()
+        return
+    }
+
     printBanner()
     verifyBinaryIntegrity()
 
@@ -186,26 +220,15 @@ func main() {
 
     baselineFile = filepath.Join(configDir, "baseline.json")
 
-    if len(os.Args) < 2 {
-        printHelp()
-        return
-    }
-
-    command := os.Args[1]
-
     switch command {
     case "init":
         initBaseline()
-        checkBaseline()
-        startMonitor()
     case "check":
         checkBaseline()
     case "monitor":
         startMonitor()
-    case "help":
-        printHelp()
     default:
         fmt.Println("Unknown command:", command)
-        printHelp()
+        printUsage()
     }
 }
