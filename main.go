@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +13,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
-)
-
-// ---------------- Globals ----------------
-var (
-	logFile      string
-	baselineFile string
 )
 
 // ---------------- Structures ----------------
@@ -34,25 +27,11 @@ type Baseline struct {
 	Processes  []string    `json:"processes"`
 }
 
+// ---------------- Global Variables ----------------
+var baselineFile string
+var logFile string
+
 // ---------------- Helper Functions ----------------
-func calculateFileHash(path string) (string, error) {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash), nil
-}
-
-func getCurrentShell() string {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		return "bash"
-	}
-	parts := strings.Split(shell, "/")
-	return parts[len(parts)-1]
-}
-
 func getTimestamp() string {
 	return time.Now().Format("2006-01-02 15:04:05")
 }
@@ -70,6 +49,24 @@ func logMessage(level string, msg string) {
 		defer f.Close()
 		fmt.Fprintln(f, logLine)
 	}
+}
+
+func calculateFileHash(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash), nil
+}
+
+func getCurrentShell() string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		return "bash"
+	}
+	parts := strings.Split(shell, "/")
+	return parts[len(parts)-1]
 }
 
 // ---------------- Banner ----------------
@@ -90,7 +87,7 @@ func initBaseline() {
 	for _, f := range criticalFiles {
 		hash, err := calculateFileHash(f)
 		if err != nil {
-			logMessage("WARNING", fmt.Sprintf("Cannot read %s: %v", f, err))
+			logMessage("WARN", fmt.Sprintf("Cannot read %s: %v", f, err))
 			continue
 		}
 		files = append(files, FileCheck{Path: f, Hash: hash})
@@ -106,7 +103,7 @@ func initBaseline() {
 	}
 
 	data, _ := json.MarshalIndent(baseline, "", "  ")
-	if err := ioutil.WriteFile(baselineFile, data, 0644); err != nil {
+	if err := os.WriteFile(baselineFile, data, 0644); err != nil {
 		logMessage("ERROR", fmt.Sprintf("Failed to write baseline: %v", err))
 		return
 	}
@@ -115,7 +112,7 @@ func initBaseline() {
 }
 
 func checkBaseline() {
-	data, err := ioutil.ReadFile(baselineFile)
+	data, err := os.ReadFile(baselineFile)
 	if err != nil {
 		logMessage("ERROR", "Baseline not found. Run init first.")
 		return
@@ -128,12 +125,10 @@ func checkBaseline() {
 	}
 
 	logMessage("INFO", "System Name: "+baseline.SystemName)
-
 	logMessage("INFO", "Files in baseline:")
 	for _, f := range baseline.Files {
 		logMessage("INFO", " - "+f.Path)
 	}
-
 	logMessage("INFO", "Allowed processes:")
 	for _, p := range baseline.Processes {
 		logMessage("INFO", " - "+p)
@@ -142,7 +137,7 @@ func checkBaseline() {
 
 // ---------------- Continuous Monitoring ----------------
 func startMonitor() {
-	data, err := ioutil.ReadFile(baselineFile)
+	data, err := os.ReadFile(baselineFile)
 	if err != nil {
 		logMessage("ERROR", "Baseline not found. Run init first.")
 		return
@@ -162,11 +157,11 @@ func startMonitor() {
 		for _, f := range baseline.Files {
 			hash, err := calculateFileHash(f.Path)
 			if err != nil {
-				logMessage("WARNING", fmt.Sprintf("%s ⚠️ cannot read", f.Path))
+				logMessage("WARN", fmt.Sprintf("%s cannot be read", f.Path))
 				continue
 			}
 			if hash != f.Hash {
-				logMessage("ALERT", fmt.Sprintf("%s ⚠️ tampered!", f.Path))
+				logMessage("WARN", fmt.Sprintf("%s tampered!", f.Path))
 			} else {
 				logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
 			}
@@ -185,7 +180,7 @@ func startMonitor() {
 				}
 			}
 			if !found {
-				logMessage("ALERT", fmt.Sprintf("Missing process: %s", p))
+				logMessage("WARN", fmt.Sprintf("Missing process: %s", p))
 			} else {
 				logMessage("INFO", fmt.Sprintf("Process running: %s", p))
 			}
@@ -218,11 +213,24 @@ func watchDirectory(path string) {
 	watcher, _ := fsnotify.NewWatcher()
 	defer watcher.Close()
 
+	eventTimes := make(map[string]time.Time)
+	debounce := 1 * time.Second
+
 	go func() {
 		for {
 			select {
 			case event := <-watcher.Events:
-				logMessage("INFO", fmt.Sprintf("File event: %s", event))
+				// Skip temporary files
+				if strings.HasPrefix(filepath.Base(event.Name), "#") {
+					continue
+				}
+
+				last, exists := eventTimes[event.Name]
+				if !exists || time.Since(last) > debounce {
+					logMessage("INFO", fmt.Sprintf("File event: %s %s", event.Op, event.Name))
+					eventTimes[event.Name] = time.Now()
+				}
+
 			case err := <-watcher.Errors:
 				logMessage("ERROR", fmt.Sprintf("Watcher error: %v", err))
 			}
