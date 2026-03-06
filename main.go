@@ -1,229 +1,295 @@
 package main
 
 import (
-    "crypto/sha256"
-    "encoding/json"
-    "fmt"
-    "io/ioutil"
-    "os"
-    "path/filepath"
-    "time"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v3/process"
 )
 
-// Global variables
-var baselineFile string
+// ---------------- Globals ----------------
+var (
+	logFile      string
+	baselineFile string
+)
+
+// ---------------- Structures ----------------
+type FileCheck struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+}
 
 type Baseline struct {
-    SystemName string   `json:"system_name"`
-    Checks     []string `json:"checks"`
+	SystemName string      `json:"system_name"`
+	Files      []FileCheck `json:"files"`
+	Processes  []string    `json:"processes"`
 }
 
-// ---------------- Banner & Binary Integrity ----------------
+// ---------------- Helper Functions ----------------
+func calculateFileHash(path string) (string, error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash), nil
+}
+
+func getCurrentShell() string {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		return "bash"
+	}
+	parts := strings.Split(shell, "/")
+	return parts[len(parts)-1]
+}
+
+func getTimestamp() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
+func logMessage(level string, msg string) {
+	timestamp := getTimestamp()
+	logLine := fmt.Sprintf("[%s] [%s] %s", timestamp, level, msg)
+
+	// Print to terminal
+	fmt.Println(logLine)
+
+	// Write to log file
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		defer f.Close()
+		fmt.Fprintln(f, logLine)
+	}
+}
+
+// ---------------- Banner ----------------
 func printBanner() {
-    fmt.Println("====================================")
-    fmt.Println("   🛡️ RuntimeGuard CLI 🛡️          ")
-    fmt.Println("   Author: Antonio Kione            ")
-    fmt.Println("====================================")
-}
-
-func verifyBinaryIntegrity() {
-    binary := "runtimeguard" // use "runtimeguard.exe" on Windows
-    data, err := ioutil.ReadFile(binary)
-    if err != nil {
-        fmt.Println("⚠️ Could not read binary for integrity check:", err)
-        return
-    }
-
-    hash := sha256.Sum256(data)
-    expected := "3f276cf2b62a24957d79879a7328588221446a58b906..." // replace with actual SHA256
-
-    if fmt.Sprintf("%x", hash) != expected {
-        fmt.Println("⚠️ Binary tampered! Exiting...")
-        os.Exit(1)
-    }
+	fmt.Println("====================================")
+	fmt.Println("   🛡️ RuntimeGuard CLI 🛡️          ")
+	fmt.Println("   Author: Antonio Kione            ")
+	fmt.Println("====================================")
 }
 
 // ---------------- Baseline Handling ----------------
 func initBaseline() {
-    fmt.Println("Using baseline file:", baselineFile)
-    fmt.Println("Initializing baseline...")
+	logMessage("INFO", "Initializing baseline...")
 
-    defaultBaseline := Baseline{
-        SystemName: "StudentSystem",
-        Checks:     []string{"file_integrity", "process_monitor"},
-    }
+	criticalFiles := []string{"/etc/passwd", "/etc/group"}
+	files := []FileCheck{}
 
-    data, _ := json.MarshalIndent(defaultBaseline, "", "  ")
-    if err := ioutil.WriteFile(baselineFile, data, 0644); err != nil {
-        fmt.Println("Failed to write baseline JSON:", err)
-        return
-    }
+	for _, f := range criticalFiles {
+		hash, err := calculateFileHash(f)
+		if err != nil {
+			logMessage("WARNING", fmt.Sprintf("Cannot read %s: %v", f, err))
+			continue
+		}
+		files = append(files, FileCheck{Path: f, Hash: hash})
+	}
 
-    fmt.Println("Baseline created successfully at", baselineFile)
+	currentShell := getCurrentShell()
+	allowedProcesses := []string{"systemd", currentShell, "runtimeguard"}
+
+	baseline := Baseline{
+		SystemName: "StudentSystem",
+		Files:      files,
+		Processes:  allowedProcesses,
+	}
+
+	data, _ := json.MarshalIndent(baseline, "", "  ")
+	if err := ioutil.WriteFile(baselineFile, data, 0644); err != nil {
+		logMessage("ERROR", fmt.Sprintf("Failed to write baseline: %v", err))
+		return
+	}
+
+	logMessage("INFO", fmt.Sprintf("Baseline created at %s", baselineFile))
 }
 
 func checkBaseline() {
-    fmt.Println("Using baseline file:", baselineFile)
-    fmt.Println("Checking system against baseline...")
+	data, err := ioutil.ReadFile(baselineFile)
+	if err != nil {
+		logMessage("ERROR", "Baseline not found. Run init first.")
+		return
+	}
 
-    data, err := ioutil.ReadFile(baselineFile)
-    if err != nil {
-        fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
-        return
-    }
+	var baseline Baseline
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		logMessage("ERROR", fmt.Sprintf("Failed to parse baseline: %v", err))
+		return
+	}
 
-    var baseline Baseline
-    if err := json.Unmarshal(data, &baseline); err != nil {
-        fmt.Println("Failed to parse baseline JSON:", err)
-        return
-    }
+	logMessage("INFO", "System Name: "+baseline.SystemName)
 
-    fmt.Println("System Name:", baseline.SystemName)
-    fmt.Println("Checks in baseline:")
-    for _, check := range baseline.Checks {
-        fmt.Println(" -", check)
-    }
+	logMessage("INFO", "Files in baseline:")
+	for _, f := range baseline.Files {
+		logMessage("INFO", " - "+f.Path)
+	}
+
+	logMessage("INFO", "Allowed processes:")
+	for _, p := range baseline.Processes {
+		logMessage("INFO", " - "+p)
+	}
 }
+
+// ---------------- Continuous Monitoring ----------------
 func startMonitor() {
-    fmt.Println("Using baseline file:", baselineFile)
-    fmt.Println("Starting monitor...")
+	data, err := ioutil.ReadFile(baselineFile)
+	if err != nil {
+		logMessage("ERROR", "Baseline not found. Run init first.")
+		return
+	}
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-    data, err := ioutil.ReadFile(baselineFile)
-    if err != nil {
-        fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
-        return
-    }
+	var baseline Baseline
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		logMessage("ERROR", fmt.Sprintf("Failed to parse baseline: %v", err))
+		return
+	}
 
-    var baseline Baseline
-    if err := json.Unmarshal(data, &baseline); err != nil {
-        fmt.Println("Failed to parse baseline JSON:", err)
-        return
-    }
+	logMessage("INFO", "Starting continuous monitoring (Ctrl+C to stop)...")
 
-    for _, check := range baseline.Checks {
-        fmt.Printf("Checking %s ... ", check)
-        time.Sleep(1 * time.Second) // simulate work
-        fmt.Println("OK")
-    }
+	for {
+		// --- File Integrity ---
+		logMessage("INFO", "---- File Integrity Check ----")
+		for _, f := range baseline.Files {
+			hash, err := calculateFileHash(f.Path)
+			if err != nil {
+				logMessage("WARNING", fmt.Sprintf("%s ⚠️ cannot read", f.Path))
+				continue
+			}
+			if hash != f.Hash {
+				logMessage("ALERT", fmt.Sprintf("%s ⚠️ tampered!", f.Path))
+			} else {
+				logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
+			}
+		}
 
-    fmt.Println("Monitoring complete.")
-=======
-    // Ask user for a directory to save the log
-    fmt.Print("Enter directory to save the log (press Enter for default ~/.runtimeguard/logs): ")
-    var logDir string
-    fmt.Scanln(&logDir)
-    if logDir == "" {
-        home, _ := os.UserHomeDir()
-        logDir = filepath.Join(home, ".runtimeguard", "logs")
-    }
+		// --- Process Check ---
+		logMessage("INFO", "---- Process Check ----")
+		out, _ := exec.Command("ps", "-eo", "comm").Output()
+		running := strings.Split(string(out), "\n")
+		for _, p := range baseline.Processes {
+			found := false
+			for _, r := range running {
+				if strings.Contains(r, p) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				logMessage("ALERT", fmt.Sprintf("Missing process: %s", p))
+			} else {
+				logMessage("INFO", fmt.Sprintf("Process running: %s", p))
+			}
+		}
 
-    os.MkdirAll(logDir, 0755)
+		// --- Port Check ---
+		logMessage("INFO", "---- Port Check ----")
+		conns, _ := net.Connections("inet")
+		for _, c := range conns {
+			if c.Status == "LISTEN" {
+				logMessage("INFO", fmt.Sprintf("Port listening: %d", c.Laddr.Port))
+			}
+		}
 
-    // Create a timestamped log file
-    logFile := filepath.Join(logDir, fmt.Sprintf("monitor-%s.log", time.Now().Format("2006-01-02_15-04-05")))
-    f, err := os.Create(logFile)
-    if err != nil {
-        fmt.Println("Failed to create log file:", err)
-        return
-    }
-    defer f.Close()
-
-    // Read baseline
-=======
->>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
-    data, err := ioutil.ReadFile(baselineFile)
-    if err != nil {
-        fmt.Println("Baseline file not found. Run './runtimeguard init' first.")
-        return
-    }
-
-    var baseline Baseline
-    if err := json.Unmarshal(data, &baseline); err != nil {
-        fmt.Println("Failed to parse baseline JSON:", err)
-        return
-    }
-
-    // Collect monitor output
-    output := ""
-    for _, check := range baseline.Checks {
-        line := fmt.Sprintf("Checking %s ... OK\n", check)
-        fmt.Print(line)
-        output += line
-        time.Sleep(1 * time.Second) // simulate work
-    }
-
-<<<<<<< HEAD
-    f.WriteString("Monitoring complete.\n")
-    fmt.Println("Monitoring complete. Log saved to", logFile)
->>>>>>> 1ba00a1 (Add help command, log saving, and file integrity checks)
+		time.Sleep(5 * time.Second)
+	}
 }
-=======
-    fmt.Println("Monitoring complete.")
-    output += "Monitoring complete.\n"
->>>>>>> 6e68ff6 (Save local fixes before switching to PR branch)
 
-    // Save log file with timestamp
-    logFile := filepath.Join(filepath.Dir(baselineFile),
-        fmt.Sprintf("monitor-%s.log", time.Now().Format("2006-01-02_15-04-05")))
-    if err := ioutil.WriteFile(logFile, []byte(output), 0644); err != nil {
-        fmt.Println("Failed to save log file:", err)
-        return
-    }
+// ---------------- Extra Functions ----------------
+func listProcesses() {
+	procs, _ := process.Processes()
+	logMessage("INFO", "PID    PROCESS")
+	for _, p := range procs {
+		name, _ := p.Name()
+		logMessage("INFO", fmt.Sprintf("%d    %s", p.Pid, name))
+	}
+}
 
-    fmt.Println("Log saved to:", logFile)
+func watchDirectory(path string) {
+	watcher, _ := fsnotify.NewWatcher()
+	defer watcher.Close()
+
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				logMessage("INFO", fmt.Sprintf("File event: %s", event))
+			case err := <-watcher.Errors:
+				logMessage("ERROR", fmt.Sprintf("Watcher error: %v", err))
+			}
+		}
+	}()
+
+	watcher.Add(path)
+	logMessage("INFO", "Watching directory: "+path)
+	select {}
 }
 
 // ---------------- CLI ----------------
-func printUsage() {
-    fmt.Println("Usage: runtimeguard <init|check|monitor|help>")
+func printHelp() {
+	logMessage("INFO", "Usage: runtimeguard <command>")
+	logMessage("INFO", "  init        - Create baseline JSON and initialize system")
+	logMessage("INFO", "  check       - Verify system against the existing baseline")
+	logMessage("INFO", "  monitor     - Run continuous monitoring on baseline files")
+	logMessage("INFO", "  processes   - List running processes")
+	logMessage("INFO", "  ports       - Show listening ports")
+	logMessage("INFO", "  watch <dir> - Watch a directory for changes")
+	logMessage("INFO", "  help        - Show this help menu")
 }
 
+// ---------------- Main ----------------
 func main() {
-    // Handle help before any baseline checks
-    if len(os.Args) < 2 {
-        printBanner()
-        printUsage()
-        return
-    }
+	printBanner()
 
-    command := os.Args[1]
+	homeDir, _ := os.UserHomeDir()
+	configDir := filepath.Join(homeDir, ".runtimeguard")
+	os.MkdirAll(configDir, 0755)
+	baselineFile = filepath.Join(configDir, "baseline.json")
+	logFile = filepath.Join(configDir, "runtimeguard.log")
 
-    if command == "help" {
-        printBanner()
-        printUsage()
-        return
-    }
+	if len(os.Args) < 2 {
+		printHelp()
+		return
+	}
 
-    printBanner()
-    verifyBinaryIntegrity()
-
-    homeDir, err := os.UserHomeDir()
-    if err != nil {
-        fmt.Println("Could not determine home directory:", err)
-        return
-    }
-
-    configDir := filepath.Join(homeDir, ".runtimeguard")
-    if _, err := os.Stat(configDir); os.IsNotExist(err) {
-        if err := os.Mkdir(configDir, 0755); err != nil {
-            fmt.Println("Failed to create config directory:", err)
-            return
-        }
-    }
-
-    baselineFile = filepath.Join(configDir, "baseline.json")
-
-    switch command {
-    case "init":
-        initBaseline()
-    case "check":
-        checkBaseline()
-    case "monitor":
-        startMonitor()
-    default:
-        fmt.Println("Unknown command:", command)
-        printUsage()
-    }
+	command := os.Args[1]
+	switch command {
+	case "init":
+		initBaseline()
+		checkBaseline()
+	case "check":
+		checkBaseline()
+	case "monitor":
+		startMonitor()
+	case "processes":
+		listProcesses()
+	case "ports":
+		conns, _ := net.Connections("inet")
+		logMessage("INFO", "LISTENING PORTS")
+		for _, c := range conns {
+			if c.Status == "LISTEN" {
+				logMessage("INFO", fmt.Sprintf("Port: %d", c.Laddr.Port))
+			}
+		}
+	case "watch":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: runtimeguard watch <directory>")
+			return
+		}
+		watchDirectory(os.Args[2])
+	case "help":
+		printHelp()
+	default:
+		fmt.Println("Unknown command:", command)
+		printHelp()
+	}
 }
