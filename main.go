@@ -153,20 +153,22 @@ func startMonitor() {
 
 	for {
 		// --- File Integrity ---
-		logMessage("INFO", "---- File Integrity Check ----")
-		for _, f := range baseline.Files {
-			hash, err := calculateFileHash(f.Path)
-			if err != nil {
-				logMessage("WARN", fmt.Sprintf("%s cannot be read", f.Path))
-				continue
-			}
-			if hash != f.Hash {
-				logMessage("WARN", fmt.Sprintf("%s tampered!", f.Path))
-			} else {
-				logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
-			}
-		}
+logMessage("INFO", "---- File Integrity Check ----")
+for _, f := range baseline.Files {
+	hash, err := calculateFileHash(f.Path)
+	if err != nil {
+		logMessage("WARN", fmt.Sprintf("%s cannot be read", f.Path))
+		continue
+	}
 
+	logMessage("INFO", fmt.Sprintf("Checking %s", f.Path))
+
+	if hash != f.Hash {
+		logMessage("WARN", fmt.Sprintf("%s tampered!", f.Path))
+	} else {
+		logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
+	}
+}
 		// --- Process Check ---
 		logMessage("INFO", "---- Process Check ----")
 		out, _ := exec.Command("ps", "-eo", "comm").Output()
