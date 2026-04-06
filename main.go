@@ -70,11 +70,12 @@ func getCurrentShell() string {
 }
 
 // ---------------- Banner ----------------
+// ---------------- Banner ----------------
 func printBanner() {
-	fmt.Println("====================================")
-	fmt.Println("   🛡️ RuntimeGuard CLI 🛡️          ")
-	fmt.Println("   Author: Antonio Kione            ")
-	fmt.Println("====================================")
+	logMessage("INFO", "====================================")
+	logMessage("INFO", "   🛡️ RuntimeGuard CLI 🛡️          ")
+	logMessage("INFO", "   Author: Antonio Kione            ")
+	logMessage("INFO", "====================================")
 }
 
 // ---------------- Baseline Handling ----------------
@@ -140,60 +141,62 @@ func startMonitor() {
 	data, err := os.ReadFile(baselineFile)
 	if err != nil {
 		logMessage("ERROR", "Baseline not found. Run init first.")
-		return
+		select {} // block forever so systemd doesn't think it exited
 	}
 
 	var baseline Baseline
 	if err := json.Unmarshal(data, &baseline); err != nil {
 		logMessage("ERROR", fmt.Sprintf("Failed to parse baseline: %v", err))
-		return
+		select {} // block forever
 	}
 
-	logMessage("INFO", "Starting continuous monitoring (Ctrl+C to stop)...")
+	logMessage("INFO", "Starting continuous monitoring...")
 
 	for {
-		// --- File Integrity ---
-		logMessage("INFO", "---- File Integrity Check ----")
-		for _, f := range baseline.Files {
-			hash, err := calculateFileHash(f.Path)
-			if err != nil {
-				logMessage("WARN", fmt.Sprintf("%s cannot be read", f.Path))
-				continue
-			}
-			if hash != f.Hash {
-				logMessage("WARN", fmt.Sprintf("%s tampered!", f.Path))
-			} else {
-				logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
-			}
-		}
-
-		// --- Process Check ---
-		logMessage("INFO", "---- Process Check ----")
-		out, _ := exec.Command("ps", "-eo", "comm").Output()
-		running := strings.Split(string(out), "\n")
-		for _, p := range baseline.Processes {
-			found := false
-			for _, r := range running {
-				if strings.Contains(r, p) {
-					found = true
-					break
+		func() {
+			// --- File Integrity ---
+			logMessage("INFO", "---- File Integrity Check ----")
+			for _, f := range baseline.Files {
+				hash, err := calculateFileHash(f.Path)
+				if err != nil {
+					logMessage("WARN", fmt.Sprintf("%s cannot be read", f.Path))
+					continue
+				}
+				if hash != f.Hash {
+					logMessage("WARN", fmt.Sprintf("%s tampered!", f.Path))
+				} else {
+					logMessage("INFO", fmt.Sprintf("%s OK", f.Path))
 				}
 			}
-			if !found {
-				logMessage("WARN", fmt.Sprintf("Missing process: %s", p))
-			} else {
-				logMessage("INFO", fmt.Sprintf("Process running: %s", p))
-			}
-		}
 
-		// --- Port Check ---
-		logMessage("INFO", "---- Port Check ----")
-		conns, _ := net.Connections("inet")
-		for _, c := range conns {
-			if c.Status == "LISTEN" {
-				logMessage("INFO", fmt.Sprintf("Port listening: %d", c.Laddr.Port))
+			// --- Process Check ---
+			logMessage("INFO", "---- Process Check ----")
+			out, _ := exec.Command("ps", "-eo", "comm").Output()
+			running := strings.Split(string(out), "\n")
+			for _, p := range baseline.Processes {
+				found := false
+				for _, r := range running {
+					if strings.Contains(r, p) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					logMessage("WARN", fmt.Sprintf("Missing process: %s", p))
+				} else {
+					logMessage("INFO", fmt.Sprintf("Process running: %s", p))
+				}
 			}
-		}
+
+			// --- Port Check ---
+			logMessage("INFO", "---- Port Check ----")
+			conns, _ := net.Connections("inet")
+			for _, c := range conns {
+				if c.Status == "LISTEN" {
+					logMessage("INFO", fmt.Sprintf("Port listening: %d", c.Laddr.Port))
+				}
+			}
+		}()
 
 		time.Sleep(5 * time.Second)
 	}
